@@ -11,7 +11,7 @@ def render_login_wall():
     st.markdown("### Welcome! Please enter a username to start.")
 
     with st.form("login_form", clear_on_submit=False):
-        username = st.text_input("Name (unique)", placeholder="unique name e.g. himanshu")
+        username = st.text_input("Name (unique)", placeholder="unique name e.g. Rishabh")
         submit_button = st.form_submit_button("Start Session", width="stretch")
 
     if submit_button:

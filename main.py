@@ -1,16 +1,17 @@
 import streamlit as st
 import os
 import time
+import cv2
+import av
 import pandas as pd
 from dotenv import load_dotenv
 from services.auth.login_wall import render_login_wall
 from services.state.session_defaults import initial_session_defaults
 from services.config.workout_config import EXERCISE_OPTIONS
-from services.ui.style_loader import load_css, inject_local_font, inject_webrtc_styles
+from services.ui.style_loader import load_css, inject_local_font
 from services.persistence.exercise_repository import init_db
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
 from services.vision.exercise_video_processor import VideoProcessorClass
-from services.tracking.metrics import sync_metrics_update
+from services.tracking.metrics import sync_metrics_from_processor
 from services.persistence.exercise_repository import get_users_exercises
 from groq import Groq
 from services.coaching.llm import LLMCoach
@@ -19,6 +20,56 @@ from services.coaching.voice_pipeline import VoicePipeline, autoplay_audio
 
 # Load environment variables from .env file
 load_dotenv()
+
+
+def _render_sidebar_metrics(container):
+    """Re-render sidebar metrics into the given st.empty() placeholder."""
+    exercise = st.session_state.get("exercise_type")
+    total_reps = st.session_state.get("reps", 0)
+    current_set_reps = st.session_state.get("current_set_reps", 0)
+    reps_per_set = st.session_state.get("reps_per_set", 0)
+    sets_completed = st.session_state.get("sets_completed", 0)
+    target_sets = st.session_state.get("target_sets", 0)
+
+    with container.container():
+        st.subheader("Progress")
+        st.metric("Total Reps", f"{total_reps}")
+        st.metric("Current Set Reps", f"{current_set_reps} / {reps_per_set}")
+        st.metric("Sets Completed", f"{sets_completed} / {target_sets}")
+
+        progress = min(sets_completed / target_sets if target_sets > 0 else 0, 1.0)
+        st.progress(progress)
+        st.divider()
+
+        if exercise == "Squats":
+            st.subheader("Squat Metrics")
+            st.metric("Knee Angle", f"{st.session_state.get('knee_angle', 0)}°")
+            st.metric("Back Angle", f"{st.session_state.get('back_angle', 0)}°")
+            st.metric("Depth Status", st.session_state.get("depth_status", "-"))
+
+        elif exercise == "Push-ups":
+            st.subheader("Push-up Metrics")
+            st.metric("Elbow Angle", f"{st.session_state.get('elbow_angle', 0)}°")
+            st.metric("Body Alignment", st.session_state.get("body_alignment", "-"))
+            st.metric("Hip Position", st.session_state.get("hip_status", "-"))
+
+        elif exercise == "Biceps Curls (Dumbbell)":
+            st.subheader("Curl Metrics")
+            st.metric("Elbow Angle", f"{st.session_state.get('elbow_angle', 0)}°")
+            st.metric("Shoulder Stability", st.session_state.get("shoulder_status", "-"))
+            st.metric("Swing Detection", st.session_state.get("swing_status", "-"))
+
+        elif exercise == "Shoulder Press":
+            st.subheader("Shoulder Press Metrics")
+            st.metric("Elbow Angle", f"{st.session_state.get('elbow_angle', 0)}°")
+            st.metric("Arm Extension", st.session_state.get("extension_status", "-"))
+            st.metric("Back Arch", st.session_state.get("back_arch_status", "-"))
+
+        elif exercise == "Lunges":
+            st.subheader("Lunge Metrics")
+            st.metric("Front Knee Angle", f"{st.session_state.get('front_knee_angle', 0)}°")
+            st.metric("Torso Angle", f"{st.session_state.get('torso_angle', 0)}°")
+            st.metric("Balance Status", st.session_state.get("balance_status", "-"))
 
   
 def main():
@@ -130,58 +181,7 @@ def main():
 
         if workout_started:
             st.divider()
-
-            exercise = st.session_state.get("exercise_type")
-            total_reps = st.session_state.get("reps")
-            current_set_reps = st.session_state.get("current_set_reps")
-            reps_per_set = st.session_state.get("reps_per_set")
-            sets_completed = st.session_state.get("sets_completed")
-            target_sets = st.session_state.get("target_sets")
-
-            st.subheader("Progress")
-
-            st.metric("Total Reps", f"{total_reps}")
-            st.metric("Current Set Reps", f"{current_set_reps} / {reps_per_set}")
-            st.metric("Sets Completed", f"{sets_completed} / {target_sets}")
-
-            progress = min(
-                sets_completed / target_sets if target_sets > 0 else 0,
-                1.0
-            )
-
-            st.progress(progress)
-
-            st.divider()
-
-            if exercise == "Squats":
-                st.subheader("Squat Metrics")
-                st.metric("Knee Angle", f"{st.session_state.knee_angle}°")
-                st.metric("Back Angle", f"{st.session_state.back_angle}°")
-                st.metric("Depth Status", st.session_state.depth_status)
-
-            elif exercise == "Push-ups":
-                st.subheader("Push-up Metrics")
-                st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
-                st.metric("Body Alignment", st.session_state.body_alignment)
-                st.metric("Hip Position", st.session_state.hip_status)
-
-            elif exercise == "Biceps Curls (Dumbbell)":
-                st.subheader("Curl Metrics")
-                st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
-                st.metric("Shoulder Stability", st.session_state.shoulder_status)
-                st.metric("Swing Detection", st.session_state.swing_status)
-
-            elif exercise == "Shoulder Press":
-                st.subheader("Shoulder Press Metrics")
-                st.metric("Elbow Angle", f"{st.session_state.elbow_angle}°")
-                st.metric("Arm Extension", st.session_state.extension_status)
-                st.metric("Back Arch", st.session_state.back_arch_status)
-
-            elif exercise == "Lunges":
-                st.subheader("Lunge Metrics")
-                st.metric("Front Knee Angle", f"{st.session_state.front_knee_angle}°")
-                st.metric("Torso Angle", f"{st.session_state.torso_angle}°")
-                st.metric("Balance Status", st.session_state.balance_status)
+            sidebar_metrics_ph = st.empty()
 
     st.markdown("""
             <div style="
@@ -230,25 +230,48 @@ def main():
             unsafe_allow_html=True,
         )
     else:
-        context = webrtc_streamer(
-            key="exercise-analysis",
-            mode=WebRtcMode.SENDRECV,
-            video_processor_factory=VideoProcessorClass,
-            rtc_configuration={"iceServers":[{"urls":["stun:stun.l.google.com:19302","stun:stun1.l.google.com:19302"]},{"urls":"turn:openrelay.metered.ca:80","username":"openrelayproject","credential":"openrelayproject"},{"urls":"turn:openrelay.metered.ca:443","username":"openrelayproject","credential":"openrelayproject"},{"urls":"turn:openrelay.metered.ca:443?transport=tcp","username":"openrelayproject","credential":"openrelayproject"}]},
-            media_stream_constraints={
-                "video": True,
-                "audio": False
-            },
-            async_processing=True
-        )
+        # Initialize video processor once in session state
+        if "video_processor" not in st.session_state:
+            st.session_state.video_processor = VideoProcessorClass()
 
-        sync_metrics_update(context)
+        processor = st.session_state.video_processor
+        frame_placeholder = st.empty()
 
-        if context.state.playing:
-            time.sleep(0.25)
-            st.rerun()
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            st.error("❌ Could not open webcam. Check camera connection.")
+        else:
+            stop_btn = st.button("⏹ STOP", key="stop_camera_btn")
 
-        inject_webrtc_styles()
+            frame_count = 0
+
+            while cap.isOpened() and not stop_btn:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                frame = cv2.flip(frame, 1)
+
+                # Feed frame through the existing VideoProcessorClass.recv()
+                av_frame = av.VideoFrame.from_ndarray(frame, format="bgr24")
+                processed_av = processor.recv(av_frame)
+                processed_img = processed_av.to_ndarray(format="bgr24")
+
+                # Update metrics using existing tracking logic
+                sync_metrics_from_processor(processor)
+
+                # Update sidebar metrics every 5 frames (~6 updates/sec)
+                frame_count += 1
+                if frame_count % 5 == 0:
+                    _render_sidebar_metrics(sidebar_metrics_ph)
+
+                # Display
+                display = cv2.cvtColor(processed_img, cv2.COLOR_BGR2RGB)
+                frame_placeholder.image(display, channels="RGB", use_container_width=True)
+
+                time.sleep(0.03)
+
+            cap.release()
 
     st.divider()
 

@@ -104,6 +104,12 @@ def autoplay_audio(audio_bytes):
     if not audio_bytes:
         return
     
-    st.markdown("<style>[data-testid='stAudio'] {display: none;}</style>", unsafe_allow_html=True)
+    import base64
+    b64_audio = base64.b64encode(audio_bytes).decode()
     
-    st.audio(audio_bytes, format="audio/mp3", autoplay=True)
+    audio_html = f"""
+    <audio autoplay style="display:none;">
+        <source src="data:audio/mp3;base64,{b64_audio}" type="audio/mp3">
+    </audio>
+    """
+    st.markdown(audio_html, unsafe_allow_html=True)
